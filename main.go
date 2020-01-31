@@ -38,31 +38,42 @@ func main() {
 	if len(os.Args) == 1 {
 		log.Fatal("Keyword is required")
 	}
+
 	keyword := os.Args[1]
 
-	k := make(chan string)
-	list := make(chan []string)
+	end_result := make(map[string]struct{})
 
-	go grabKeyWords(k, list, true)
+	suggested_keyword := make(chan string)
+	prefix := make(chan string)
 
-	k <- keyword
+	go requestKeyWords(prefix, suggested_keyword)
 
-	readValues(list)
+	prefix <- keyword
+
+	for item := range suggested_keyword {
+		end_result[item] = struct{}{}
+		shit(item, end_result)
+	}
+
+	for key := range end_result {
+		fmt.Println(key)
+	}
 
 }
 
-func readValues(list chan []string) {
-	for {
-		val, ok := <-list
-		if ok == false {
-			break
-		} else {
-			fmt.Println(val)
-		}
+func shit(item string, end_result map[string]struct{}) {
+	suggested_keyword := make(chan string)
+	prefix := make(chan string)
+
+	go requestKeyWords(prefix, suggested_keyword)
+	prefix <- item
+
+	for item := range suggested_keyword {
+		end_result[item] = struct{}{}
 	}
 }
 
-func grabKeyWords(k chan string, c chan []string, more bool) {
+func requestKeyWords(prefix chan string, c chan string) {
 	client := http.Client{}
 
 	req, _ := http.NewRequest("GET", "https://completion.amazon.com/api/2017/suggestions", nil)
@@ -85,7 +96,7 @@ func grabKeyWords(k chan string, c chan []string, more bool) {
 	q.Add("b2b", "0")
 	q.Add("fresh", "0")
 	q.Add("ks", "80")
-	q.Add("prefix", <-k)
+	q.Add("prefix", <-prefix)
 	q.Add("event", "onKeyPress")
 	q.Add("limit", "11")
 	q.Add("fb", "1")
@@ -102,18 +113,15 @@ func grabKeyWords(k chan string, c chan []string, more bool) {
 	var reader io.ReadCloser
 	reader, _ = gzip.NewReader(resp.Body)
 	defer reader.Close()
-
 	var result KeywordSuggestions
-
 	json.NewDecoder(reader).Decode(&result)
 
-	var list []string
+	//var list []string
 	for _, item := range result.Suggestions {
-		list = append(list, item.Value)
+		//list = append(list, item.Value)
+		c <- item.Value
 	}
-	c <- list
+	//c <- list
 
-	if !more {
-		close(c)
-	}
+	close(c)
 }
