@@ -33,48 +33,46 @@ type KeywordSuggestions struct {
 	Shuffled          bool         `json:"shuffled"`
 }
 
+type Keyword struct {
+	Keyword  string
+	Continue bool
+}
+
 func main() {
 
 	if len(os.Args) == 1 {
 		log.Fatal("Keyword is required")
 	}
 
-	keyword := os.Args[1]
+	keyword := Keyword{os.Args[1], true}
+	endResult := make(map[string]struct{})
 
-	end_result := make(map[string]struct{})
+	getMeSomeKeyWords(keyword, endResult, true)
 
-	suggested_keyword := make(chan string)
-	prefix := make(chan string)
-
-	go requestKeyWords(prefix, suggested_keyword)
-
-	prefix <- keyword
-
-	for item := range suggested_keyword {
-		end_result[item] = struct{}{}
-		shit(item, end_result)
-	}
-
-	for key := range end_result {
+	for key := range endResult {
 		fmt.Println(key)
 	}
 
 }
 
-func shit(item string, end_result map[string]struct{}) {
-	suggested_keyword := make(chan string)
-	prefix := make(chan string)
+func getMeSomeKeyWords(inputKeyword Keyword, endResult map[string]struct{}, more bool) {
 
-	go requestKeyWords(prefix, suggested_keyword)
-	prefix <- item
+	keyChannel := make(chan Keyword)
 
-	for item := range suggested_keyword {
-		end_result[item] = struct{}{}
+	go requestKeyWords(keyChannel)
+	keyChannel <- inputKeyword
+
+	for item := range keyChannel {
+		endResult[item.Keyword] = struct{}{}
+		if more {
+			getMeSomeKeyWords(item, endResult, false)
+		}
 	}
 }
 
-func requestKeyWords(prefix chan string, c chan string) {
+func requestKeyWords(keyChannel chan Keyword) {
 	client := http.Client{}
+	keyword := <-keyChannel
 
 	req, _ := http.NewRequest("GET", "https://completion.amazon.com/api/2017/suggestions", nil)
 
@@ -96,7 +94,7 @@ func requestKeyWords(prefix chan string, c chan string) {
 	q.Add("b2b", "0")
 	q.Add("fresh", "0")
 	q.Add("ks", "80")
-	q.Add("prefix", <-prefix)
+	q.Add("prefix", keyword.Keyword)
 	q.Add("event", "onKeyPress")
 	q.Add("limit", "11")
 	q.Add("fb", "1")
@@ -116,12 +114,9 @@ func requestKeyWords(prefix chan string, c chan string) {
 	var result KeywordSuggestions
 	json.NewDecoder(reader).Decode(&result)
 
-	//var list []string
 	for _, item := range result.Suggestions {
-		//list = append(list, item.Value)
-		c <- item.Value
+		keyChannel <- Keyword{item.Value, false}
 	}
-	//c <- list
 
-	close(c)
+	close(keyChannel)
 }
