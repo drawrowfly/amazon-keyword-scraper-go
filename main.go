@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/gzip"
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -45,10 +47,6 @@ func DoWork() {
 
 func main() {
 
-	if len(os.Args) == 1 {
-		log.Fatal("Keyword is required")
-	}
-
 	concurency := flag.Int("concurency", 2, "the number of goroutines that are allowed to run concurrently")
 	limit := flag.Int("limit", 100, "number of keywords to collect")
 	keywordToUse := flag.String("keyword", "iphone", "keyword to use")
@@ -58,31 +56,45 @@ func main() {
 	var wg sync.WaitGroup
 
 	keyword := Keyword{*keywordToUse}
-	keyWordList := make(map[string]struct{})
+	keyWordList := make(map[string]string)
 	keyChannel := make(chan Keyword)
+
+	fmt.Printf("Amazon KeyWord Collector Started. Collect %d relevant keywords for the keyword '%s' \n", *limit, *keywordToUse)
 
 	go requestKeyWords(keyChannel, keyword)
 
-	for i := 1; i <= 1; i++ {
-		for item := range keyChannel {
-			if len(keyWordList) >= *limit {
+	for item := range keyChannel {
+		if len(keyWordList) >= *limit {
+			break
+		}
+		if _, ok := keyWordList[item.Keyword]; !ok {
+			keyWordList[item.Keyword] = ""
+			wg.Add(1)
+			go func(item Keyword) {
+				defer wg.Done()
+				concurrentGoroutines <- struct{}{}
+				requestKeyWords(keyChannel, item)
 				<-concurrentGoroutines
-				close(keyChannel)
-			}
-			if _, ok := keyWordList[item.Keyword]; !ok {
-				fmt.Println(item.Keyword)
-				keyWordList[item.Keyword] = struct{}{}
-				wg.Add(1)
-				go func(item Keyword) {
-					defer wg.Done()
-					concurrentGoroutines <- struct{}{}
-					requestKeyWords(keyChannel, item)
-					<-concurrentGoroutines
-				}(item)
-			}
+			}(item)
 		}
 	}
 
+	records := [][]string{
+		{"#", "key_words"},
+	}
+	csvFile, err := os.Create(*keywordToUse + ".csv")
+	if err != nil {
+		log.Fatalf("Failed creating file: %s", err)
+	}
+	csvwriter := csv.NewWriter(csvFile)
+	count := 1
+	for key := range keyWordList {
+		records = append(records, []string{strconv.Itoa(count), key})
+		count++
+	}
+	csvwriter.WriteAll(records)
+
+	fmt.Printf("Result: %d keywords related to the keyword '%s' were saved to the %s.csv file \n", len(keyWordList), *keywordToUse, *keywordToUse)
 }
 
 func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
