@@ -94,7 +94,7 @@ func main() {
 	}
 	csvwriter.WriteAll(records)
 
-	fmt.Printf("Result: %d keywords related to the keyword '%s' were saved to the %s.csv file \n", len(keyWordList), *keywordToUse, *keywordToUse)
+	fmt.Printf("Result: %d keywords related to the keyword '%s' were saved to the '%s.csv' file \n", len(keyWordList), *keywordToUse, *keywordToUse)
 }
 
 func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
