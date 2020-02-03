@@ -3,6 +3,8 @@
 # Amazon Keyword Suggestion Tool
 From 1 keyword you can get up to hundreds and even thousands Unique and Relevant Keywords ready to be used on Amazon.
 
+KeyWords are collected from Amazon Web API
+
 Result will be saved to a csv file
 
 ```go

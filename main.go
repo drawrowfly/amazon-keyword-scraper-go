@@ -63,25 +63,27 @@ func main() {
 
 	go requestKeyWords(keyChannel, keyword)
 
-	repeatedKeywords := 0
+	toLongKeys := 0
 	for item := range keyChannel {
 		if len(keyWordList) >= *limit {
 			break
 		}
-		if repeatedKeywords > 150 {
+		if toLongKeys > 10 {
 			break
 		}
-		if _, ok := keyWordList[item.Keyword]; !ok {
-			keyWordList[item.Keyword] = struct{}{}
-			wg.Add(1)
-			go func(item Keyword) {
-				defer wg.Done()
-				concurrentGoroutines <- struct{}{}
-				requestKeyWords(keyChannel, item)
-				<-concurrentGoroutines
-			}(item)
+		if item.Keyword == "" {
+			toLongKeys++
 		} else {
-			repeatedKeywords++
+			if _, ok := keyWordList[item.Keyword]; !ok {
+				keyWordList[item.Keyword] = struct{}{}
+				wg.Add(1)
+				go func(item Keyword) {
+					defer wg.Done()
+					concurrentGoroutines <- struct{}{}
+					requestKeyWords(keyChannel, item)
+					<-concurrentGoroutines
+				}(item)
+			}
 		}
 	}
 
@@ -146,7 +148,11 @@ func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
 	var result KeywordSuggestions
 	json.NewDecoder(reader).Decode(&result)
 
-	for _, item := range result.Suggestions {
-		keyChannel <- Keyword{item.Value}
+	if len(result.Suggestions) == 1 {
+		keyChannel <- Keyword{""}
+	} else {
+		for _, item := range result.Suggestions {
+			keyChannel <- Keyword{item.Value}
+		}
 	}
 }
