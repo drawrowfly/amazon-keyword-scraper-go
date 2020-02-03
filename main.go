@@ -3,11 +3,13 @@ package main
 import (
 	"compress/gzip"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -34,8 +36,11 @@ type KeywordSuggestions struct {
 }
 
 type Keyword struct {
-	Keyword  string
-	Continue bool
+	Keyword string
+}
+
+func DoWork() {
+	time.Sleep(500 * time.Millisecond)
 }
 
 func main() {
@@ -44,35 +49,44 @@ func main() {
 		log.Fatal("Keyword is required")
 	}
 
-	keyword := Keyword{os.Args[1], true}
-	endResult := make(map[string]struct{})
+	concurency := flag.Int("concurency", 2, "the number of goroutines that are allowed to run concurrently")
+	limit := flag.Int("limit", 100, "number of keywords to collect")
+	keywordToUse := flag.String("keyword", "iphone", "keyword to use")
+	flag.Parse()
 
-	getMeSomeKeyWords(keyword, endResult, true)
+	concurrentGoroutines := make(chan struct{}, *concurency)
+	var wg sync.WaitGroup
 
-	for key := range endResult {
-		fmt.Println(key)
-	}
-
-}
-
-func getMeSomeKeyWords(inputKeyword Keyword, endResult map[string]struct{}, more bool) {
-
+	keyword := Keyword{*keywordToUse}
+	keyWordList := make(map[string]struct{})
 	keyChannel := make(chan Keyword)
 
-	go requestKeyWords(keyChannel)
-	keyChannel <- inputKeyword
+	go requestKeyWords(keyChannel, keyword)
 
-	for item := range keyChannel {
-		endResult[item.Keyword] = struct{}{}
-		if more {
-			getMeSomeKeyWords(item, endResult, false)
+	for i := 1; i <= 1; i++ {
+		for item := range keyChannel {
+			if len(keyWordList) >= *limit {
+				<-concurrentGoroutines
+				close(keyChannel)
+			}
+			if _, ok := keyWordList[item.Keyword]; !ok {
+				fmt.Println(item.Keyword)
+				keyWordList[item.Keyword] = struct{}{}
+				wg.Add(1)
+				go func(item Keyword) {
+					defer wg.Done()
+					concurrentGoroutines <- struct{}{}
+					requestKeyWords(keyChannel, item)
+					<-concurrentGoroutines
+				}(item)
+			}
 		}
 	}
+
 }
 
-func requestKeyWords(keyChannel chan Keyword) {
+func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
 	client := http.Client{}
-	keyword := <-keyChannel
 
 	req, _ := http.NewRequest("GET", "https://completion.amazon.com/api/2017/suggestions", nil)
 
@@ -115,8 +129,6 @@ func requestKeyWords(keyChannel chan Keyword) {
 	json.NewDecoder(reader).Decode(&result)
 
 	for _, item := range result.Suggestions {
-		keyChannel <- Keyword{item.Value, false}
+		keyChannel <- Keyword{item.Value}
 	}
-
-	close(keyChannel)
 }
