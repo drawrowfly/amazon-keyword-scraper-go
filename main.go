@@ -47,7 +47,7 @@ func DoWork() {
 
 func main() {
 
-	concurency := flag.Int("concurency", 2, "the number of goroutines that are allowed to run concurrently")
+	concurency := flag.Int("concurency", 5, "the number of goroutines that are allowed to run concurrently")
 	limit := flag.Int("limit", 100, "number of keywords to collect")
 	keywordToUse := flag.String("keyword", "iphone", "keyword to use")
 	flag.Parse()
@@ -56,19 +56,23 @@ func main() {
 	var wg sync.WaitGroup
 
 	keyword := Keyword{*keywordToUse}
-	keyWordList := make(map[string]string)
+	keyWordList := make(map[string]struct{})
 	keyChannel := make(chan Keyword)
 
 	fmt.Printf("Amazon KeyWord Collector Started. Collect %d relevant keywords for the keyword '%s' \n", *limit, *keywordToUse)
 
 	go requestKeyWords(keyChannel, keyword)
 
+	repeatedKeywords := 0
 	for item := range keyChannel {
 		if len(keyWordList) >= *limit {
 			break
 		}
+		if repeatedKeywords > 150 {
+			break
+		}
 		if _, ok := keyWordList[item.Keyword]; !ok {
-			keyWordList[item.Keyword] = ""
+			keyWordList[item.Keyword] = struct{}{}
 			wg.Add(1)
 			go func(item Keyword) {
 				defer wg.Done()
@@ -76,6 +80,8 @@ func main() {
 				requestKeyWords(keyChannel, item)
 				<-concurrentGoroutines
 			}(item)
+		} else {
+			repeatedKeywords++
 		}
 	}
 
