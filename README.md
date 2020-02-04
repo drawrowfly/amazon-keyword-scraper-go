@@ -1,7 +1,7 @@
 ## My First App In Go
 
 # Amazon Keyword Suggestion Tool
-From 1 keyword you can get up to hundreds and even thousands Unique and Relevant Keywords ready to be used on Amazon.
+From 1 keyword you can get up to hundred or even thousands **Unique and Relevant Keywords** with a **Number of Active Products** per each keyword and ready to be used on Amazon.
 
 KeyWords are collected from Amazon Web API
 
@@ -10,6 +10,9 @@ Result will be saved to a csv file
 ```go
 go run main.go -keyword "iphone case" -limit 1000
 ```
+
+## CSV Example
+![Demo](https://i.imgur.com/OwCLSev.png)
 
 ## Result in CLI
 ```

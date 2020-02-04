@@ -7,11 +7,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
-	"sync"
 	"time"
 )
 
@@ -38,7 +40,8 @@ type KeywordSuggestions struct {
 }
 
 type Keyword struct {
-	Keyword string
+	Keyword          string
+	TotalResultCount int64
 }
 
 func DoWork() {
@@ -53,10 +56,9 @@ func main() {
 	flag.Parse()
 
 	concurrentGoroutines := make(chan struct{}, *concurency)
-	var wg sync.WaitGroup
 
-	keyword := Keyword{*keywordToUse}
-	keyWordList := make(map[string]struct{})
+	keyword := Keyword{*keywordToUse, 0}
+	keyWordList := make(map[string]Keyword)
 	keyChannel := make(chan Keyword)
 
 	fmt.Printf("Amazon KeyWord Collector Started. Collect %d relevant keywords for the keyword '%s' \n", *limit, *keywordToUse)
@@ -75,10 +77,8 @@ func main() {
 			toLongKeys++
 		} else {
 			if _, ok := keyWordList[item.Keyword]; !ok {
-				keyWordList[item.Keyword] = struct{}{}
-				wg.Add(1)
+				keyWordList[item.Keyword] = item
 				go func(item Keyword) {
-					defer wg.Done()
 					concurrentGoroutines <- struct{}{}
 					requestKeyWords(keyChannel, item)
 					<-concurrentGoroutines
@@ -87,8 +87,26 @@ func main() {
 		}
 	}
 
+	concurrentGoroutinesProductCount := make(chan struct{}, 10)
+	totalResultCount := make(chan Keyword)
+	for key := range keyWordList {
+		go func(item Keyword) {
+			concurrentGoroutinesProductCount <- struct{}{}
+			keywordMetadata(totalResultCount, item)
+			<-concurrentGoroutinesProductCount
+		}(keyWordList[key])
+	}
+	products := 0
+	for item := range totalResultCount {
+		products++
+		keyWordList[item.Keyword] = item
+		if products >= len(keyWordList) {
+			close(totalResultCount)
+		}
+	}
+
 	records := [][]string{
-		{"#", "key_words"},
+		{"#", "key_words", "total_products"},
 	}
 	csvFile, err := os.Create(*keywordToUse + ".csv")
 	if err != nil {
@@ -97,12 +115,14 @@ func main() {
 	csvwriter := csv.NewWriter(csvFile)
 	count := 1
 	for key := range keyWordList {
-		records = append(records, []string{strconv.Itoa(count), key})
+		totalProducts := strconv.FormatInt(keyWordList[key].TotalResultCount, 10)
+		records = append(records, []string{strconv.Itoa(count), keyWordList[key].Keyword, totalProducts})
 		count++
 	}
 	csvwriter.WriteAll(records)
 
 	fmt.Printf("Result: %d keywords related to the keyword '%s' were saved to the '%s.csv' file \n", len(keyWordList), *keywordToUse, *keywordToUse)
+
 }
 
 func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
@@ -110,7 +130,7 @@ func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
 
 	req, _ := http.NewRequest("GET", "https://completion.amazon.com/api/2017/suggestions", nil)
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.117 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_"+strconv.Itoa(rand.Intn(15-9)+9)+"_1) AppleWebKit/531.36 (KHTML, like Gecko) Chrome/"+strconv.Itoa(rand.Intn(79-70)+70)+".0.3945.130 Safari/531.36")
 	req.Header.Set("Origin", "https://www.amazon.com")
 	req.Header.Set("Referer", "https://www.amazon.com/")
 	req.Header.Set("Accept-Encoding", "gzip")
@@ -149,10 +169,54 @@ func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
 	json.NewDecoder(reader).Decode(&result)
 
 	if len(result.Suggestions) == 1 {
-		keyChannel <- Keyword{""}
+		keyChannel <- Keyword{"", 0}
 	} else {
 		for _, item := range result.Suggestions {
-			keyChannel <- Keyword{item.Value}
+			keyChannel <- Keyword{item.Value, 0}
 		}
 	}
+}
+
+func keywordMetadata(totalResultCount chan Keyword, keyword Keyword) {
+	client := http.Client{}
+
+	req, _ := http.NewRequest("GET", "https://www.amazon.com/s", nil)
+
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_"+strconv.Itoa(rand.Intn(15-9)+9)+"_1) AppleWebKit/531.36 (KHTML, like Gecko) Chrome/"+strconv.Itoa(rand.Intn(79-70)+70)+".0.3945.130 Safari/531.36")
+	req.Header.Set("Origin", "https://www.amazon.com")
+	req.Header.Set("Referer", "https://www.amazon.com/")
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9,ru;q=0.8")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9")
+
+	q := req.URL.Query()
+	q.Add("i", "aps")
+	q.Add("k", keyword.Keyword)
+	q.Add("ref", "nb_sb_noss")
+	q.Add("url", "search-alias=aps")
+	req.URL.RawQuery = q.Encode()
+
+	req.URL.RawQuery = q.Encode()
+
+	r, err := client.Do(req)
+
+	if err != nil {
+		log.Fatalln(err)
+	}
+	var reader io.ReadCloser
+	reader, _ = gzip.NewReader(r.Body)
+
+	dataInBytes, _ := ioutil.ReadAll(reader)
+	pageContent := string(dataInBytes)
+
+	reTotalCount := regexp.MustCompile(`(\w*"totalResultCount":\w*)(.[0-9])`)
+	res := reTotalCount.FindAllString(string(pageContent), -1)
+	var total int64 = 0
+	if len(res) > 0 {
+		reCount := regexp.MustCompile(`[-]?\d[\d,]*[\.]?[\d{2}]*`)
+		submatchall := reCount.FindAllString(res[0], -1)
+		total, _ = strconv.ParseInt(submatchall[0], 0, 64)
+	}
+
+	totalResultCount <- Keyword{keyword.Keyword, total}
 }
