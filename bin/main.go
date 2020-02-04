@@ -215,7 +215,7 @@ func keywordMetadata(totalResultCount chan Keyword, keyword Keyword) {
 
 	reTotalCount := regexp.MustCompile(`(\w*"totalResultCount":\w*)(.[0-9])`)
 	res := reTotalCount.FindAllString(string(pageContent), -1)
-	//fmt.Println(req.URL.RawQuery, res)
+
 	var total int64 = 0
 	if len(res) > 0 {
 		reCount := regexp.MustCompile(`[-]?\d[\d,]*[\.]?[\d{2}]*`)
