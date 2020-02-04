@@ -67,7 +67,7 @@ func main() {
 	keyWordList := make(map[string]Keyword)
 	keyChannel := make(chan Keyword)
 
-	g.Printf("Amazon KeyWord Collector Started. Collect %d relevant keywords for the keyword '%s' \n", *limit, *keywordToUse)
+	g.Printf("Collect %d relevant keywords for the keyword '%s' \n", *limit, *keywordToUse)
 
 	go requestKeyWords(keyChannel, keyword)
 
