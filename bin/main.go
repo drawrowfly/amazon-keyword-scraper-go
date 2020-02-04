@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/fatih/color"
+	"github.com/gosuri/uiprogress"
 )
 
 type Suggestion struct {
@@ -52,22 +54,37 @@ func DoWork() {
 var (
 	g = color.New(color.FgHiGreen)
 	y = color.New(color.FgHiYellow)
+	r = color.New(color.FgHiRed)
 )
 
 func main() {
+	// Init progress bar
+	uiprogress.Start()
 
+	// Flags
 	concurency := flag.Int("concurency", 5, "the number of goroutines that are allowed to run concurrently")
 	limit := flag.Int("limit", 100, "number of keywords to collect")
-	keywordToUse := flag.String("keyword", "iphone", "keyword to use")
+	keywordToUse := flag.String("keyword", "", "keyword to use")
 	flag.Parse()
 
+	if *keywordToUse == "" {
+		r.Println("KeyWord is missing. To view help enter: akrt -help")
+		os.Exit(1)
+	}
+	g.Printf("Collect %d relevant keywords to the keyword '%s' \n", *limit, *keywordToUse)
+
+	// Keyword Collector progress bar
+	keywordBar := uiprogress.AddBar(*limit).AppendCompleted().PrependElapsed()
+	keywordBar.PrependFunc(func(b *uiprogress.Bar) string {
+		return fmt.Sprintf("Keywords (%d/%d)", b.Current(), *limit)
+	})
+
+	// Limiting concurent requests to collect keywords
 	concurrentGoroutines := make(chan struct{}, *concurency)
 
 	keyword := Keyword{*keywordToUse, 0}
 	keyWordList := make(map[string]Keyword)
 	keyChannel := make(chan Keyword)
-
-	g.Printf("Collect %d relevant keywords for the keyword '%s' \n", *limit, *keywordToUse)
 
 	go requestKeyWords(keyChannel, keyword)
 
@@ -83,6 +100,7 @@ func main() {
 			toLongKeys++
 		} else {
 			if _, ok := keyWordList[item.Keyword]; !ok {
+				keywordBar.Incr()
 				keyWordList[item.Keyword] = item
 				go func(item Keyword) {
 					concurrentGoroutines <- struct{}{}
@@ -92,9 +110,16 @@ func main() {
 			}
 		}
 	}
-
-	concurrentGoroutinesProductCount := make(chan struct{}, 10)
+	// Limiting concurent requests to collect number of products per keyword
+	concurrentGoroutinesProductCount := make(chan struct{}, 5)
 	totalResultCount := make(chan Keyword)
+
+	// Product Count Collector progress bar
+	productCountBar := uiprogress.AddBar(len(keyWordList)).AppendCompleted().PrependElapsed()
+	productCountBar.PrependFunc(func(b *uiprogress.Bar) string {
+		return fmt.Sprintf("Product Count (%d/%d)", b.Current(), len(keyWordList))
+	})
+
 	for key := range keyWordList {
 		go func(item Keyword) {
 			concurrentGoroutinesProductCount <- struct{}{}
@@ -105,6 +130,7 @@ func main() {
 	products := 0
 	for item := range totalResultCount {
 		products++
+		productCountBar.Incr()
 		keyWordList[item.Keyword] = item
 		if products >= len(keyWordList) {
 			close(totalResultCount)
@@ -127,7 +153,7 @@ func main() {
 	}
 	csvwriter.WriteAll(records)
 
-	y.Printf("Result: i have found %d new keywords related to the keyword '%s' and saved them to the '%s.csv' file \n", len(keyWordList), *keywordToUse, *keywordToUse)
+	y.Printf("Collected %d keywords: '%s.csv' \n", len(keyWordList), *keywordToUse)
 
 }
 
