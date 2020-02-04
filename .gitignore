@@ -1,2 +1,4 @@
 *.csv
 .DS_Store
+dist/
+.goreleaser.yml

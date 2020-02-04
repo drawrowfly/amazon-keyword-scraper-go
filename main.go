@@ -5,7 +5,6 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -15,6 +14,8 @@ import (
 	"regexp"
 	"strconv"
 	"time"
+
+	"github.com/fatih/color"
 )
 
 type Suggestion struct {
@@ -48,6 +49,11 @@ func DoWork() {
 	time.Sleep(500 * time.Millisecond)
 }
 
+var (
+	g = color.New(color.FgHiGreen)
+	y = color.New(color.FgHiYellow)
+)
+
 func main() {
 
 	concurency := flag.Int("concurency", 5, "the number of goroutines that are allowed to run concurrently")
@@ -61,7 +67,7 @@ func main() {
 	keyWordList := make(map[string]Keyword)
 	keyChannel := make(chan Keyword)
 
-	fmt.Printf("Amazon KeyWord Collector Started. Collect %d relevant keywords for the keyword '%s' \n", *limit, *keywordToUse)
+	g.Printf("Amazon KeyWord Collector Started. Collect %d relevant keywords for the keyword '%s' \n", *limit, *keywordToUse)
 
 	go requestKeyWords(keyChannel, keyword)
 
@@ -121,7 +127,7 @@ func main() {
 	}
 	csvwriter.WriteAll(records)
 
-	fmt.Printf("Result: %d keywords related to the keyword '%s' were saved to the '%s.csv' file \n", len(keyWordList), *keywordToUse, *keywordToUse)
+	y.Printf("Result: i have found %d new keywords related to the keyword '%s' and saved them to the '%s.csv' file \n", len(keyWordList), *keywordToUse, *keywordToUse)
 
 }
 
@@ -196,8 +202,6 @@ func keywordMetadata(totalResultCount chan Keyword, keyword Keyword) {
 	q.Add("url", "search-alias=aps")
 	req.URL.RawQuery = q.Encode()
 
-	req.URL.RawQuery = q.Encode()
-
 	r, err := client.Do(req)
 
 	if err != nil {
@@ -211,6 +215,7 @@ func keywordMetadata(totalResultCount chan Keyword, keyword Keyword) {
 
 	reTotalCount := regexp.MustCompile(`(\w*"totalResultCount":\w*)(.[0-9])`)
 	res := reTotalCount.FindAllString(string(pageContent), -1)
+	//fmt.Println(req.URL.RawQuery, res)
 	var total int64 = 0
 	if len(res) > 0 {
 		reCount := regexp.MustCompile(`[-]?\d[\d,]*[\.]?[\d{2}]*`)
