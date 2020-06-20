@@ -14,42 +14,10 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"time"
 
 	"github.com/fatih/color"
 	"github.com/gosuri/uiprogress"
 )
-
-type Suggestion struct {
-	SuggType       string `json:"suggType"`
-	Value          string `json:"value"`
-	RefTag         string `json:"refTag"`
-	StrategyId     string `json:"strategyId"`
-	Ghost          bool   `json:"ghost"`
-	Help           bool   `json:"help"`
-	Fallback       bool   `json:"fallback"`
-	SpellCorrected bool   `json:"spellCorrected"`
-	BlackListed    bool   `json:"blackListed"`
-	XcatOnly       bool   `json:"xcatOnly"`
-}
-type KeywordSuggestions struct {
-	Alias             string       `json:"alias"`
-	Prefix            string       `json:"prefix"`
-	Suffix            string       `json:"suffix"`
-	Suggestions       []Suggestion `json:"suggestions"`
-	SuggestionTitleId string       `json:"suggestionTitleId"`
-	ResponseId        string       `json:"responseId"`
-	Shuffled          bool         `json:"shuffled"`
-}
-
-type Keyword struct {
-	Keyword          string
-	TotalResultCount int64
-}
-
-func DoWork() {
-	time.Sleep(500 * time.Millisecond)
-}
 
 var (
 	g = color.New(color.FgHiGreen)
@@ -128,15 +96,17 @@ func main() {
 		}(keyWordList[key])
 	}
 	products := 0
+	productCountBar.Incr()
 	for item := range totalResultCount {
-		products++
 		productCountBar.Incr()
+		products++
 		keyWordList[item.Keyword] = item
 		if products >= len(keyWordList) {
 			close(totalResultCount)
 		}
 	}
 
+	// Saving result to the CSV file
 	records := [][]string{
 		{"#", "key_words", "total_products"},
 	}
@@ -163,29 +133,15 @@ func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
 	req, _ := http.NewRequest("GET", "https://completion.amazon.com/api/2017/suggestions", nil)
 
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_"+strconv.Itoa(rand.Intn(15-9)+9)+"_1) AppleWebKit/531.36 (KHTML, like Gecko) Chrome/"+strconv.Itoa(rand.Intn(79-70)+70)+".0.3945.130 Safari/531.36")
-	req.Header.Set("Origin", "https://www.amazon.com")
-	req.Header.Set("Referer", "https://www.amazon.com/")
-	req.Header.Set("Accept-Encoding", "gzip")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9,ru;q=0.8")
-	req.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
 
 	q := req.URL.Query()
-	q.Add("api_key", "key_from_environment_or_flag")
-	q.Add("page-type", "Gateway")
-	q.Add("lop", "en_US")
-	q.Add("site-variant", "desktop")
-	q.Add("client-info", "amazon-search-ui")
 	q.Add("mid", "ATVPDKIKX0DER")
 	q.Add("alias", "aps")
-	q.Add("b2b", "0")
 	q.Add("fresh", "0")
-	q.Add("ks", "80")
+	q.Add("ks", "88")
 	q.Add("prefix", keyword.Keyword)
 	q.Add("event", "onKeyPress")
 	q.Add("limit", "11")
-	q.Add("fb", "1")
-	q.Add("suggestion-type", "KEYWORD")
-	q.Add("_", string(time.Now().UnixNano()/int64(time.Millisecond)))
 	req.URL.RawQuery = q.Encode()
 
 	resp, err := client.Do(req)
@@ -194,11 +150,13 @@ func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
 		log.Fatalln(err)
 	}
 
-	var reader io.ReadCloser
-	reader, _ = gzip.NewReader(resp.Body)
-	defer reader.Close()
 	var result KeywordSuggestions
-	json.NewDecoder(reader).Decode(&result)
+
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if len(result.Suggestions) == 0 {
+		log.Fatalln("No keywords found")
+	}
 
 	if len(result.Suggestions) == 1 {
 		keyChannel <- Keyword{"", 0}
