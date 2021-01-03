@@ -14,15 +14,17 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"sync"
 
 	"github.com/fatih/color"
 	"github.com/gosuri/uiprogress"
 )
 
 var (
-	g = color.New(color.FgHiGreen)
-	y = color.New(color.FgHiYellow)
-	r = color.New(color.FgHiRed)
+	g     = color.New(color.FgHiGreen)
+	y     = color.New(color.FgHiYellow)
+	r     = color.New(color.FgHiRed)
+	muCtx sync.RWMutex
 )
 
 func main() {
@@ -53,29 +55,38 @@ func main() {
 	keyword := Keyword{*keywordToUse, 0}
 	keyWordList := make(map[string]Keyword)
 	keyChannel := make(chan Keyword)
+	// Initially there's just 1 keyword
+	context := Context{1}
 
-	go requestKeyWords(keyChannel, keyword)
+	go requestKeyWords(keyChannel, keyword, &context)
 
-	toLongKeys := 0
 	for item := range keyChannel {
 		if len(keyWordList) >= *limit {
 			break
 		}
-		if toLongKeys > 10 {
-			break
-		}
-		if item.Keyword == "" {
-			toLongKeys++
-		} else {
+
+		if item.Keyword != "" {
 			if _, ok := keyWordList[item.Keyword]; !ok {
 				keywordBar.Incr()
 				keyWordList[item.Keyword] = item
 				go func(item Keyword) {
 					concurrentGoroutines <- struct{}{}
-					requestKeyWords(keyChannel, item)
+					requestKeyWords(keyChannel, item, &context)
 					<-concurrentGoroutines
 				}(item)
+			} else {
+				// decrement total count, because this suggestion is already in the list
+				muCtx.Lock()
+				context.KeywordsFound--
+				muCtx.Unlock()
 			}
+		}
+
+		muCtx.RLock()
+		keywordsFound := context.KeywordsFound
+		muCtx.RUnlock()
+		if keywordsFound <= 0 {
+			break
 		}
 	}
 	// Limiting concurent requests to collect number of products per keyword
@@ -127,7 +138,7 @@ func main() {
 
 }
 
-func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
+func requestKeyWords(keyChannel chan Keyword, keyword Keyword, context *Context) {
 	client := http.Client{}
 
 	req, _ := http.NewRequest("GET", "https://completion.amazon.com/api/2017/suggestions", nil)
@@ -157,6 +168,15 @@ func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
 	if len(result.Suggestions) == 0 {
 		log.Fatalln("No keywords found")
 	}
+
+	// Substract look up keyword and add suggestions, if any
+	muCtx.Lock()
+	if len(result.Suggestions) == 1 {
+		context.KeywordsFound--
+	} else {
+		context.KeywordsFound += len(result.Suggestions) - 1
+	}
+	muCtx.Unlock()
 
 	if len(result.Suggestions) == 1 {
 		keyChannel <- Keyword{"", 0}
