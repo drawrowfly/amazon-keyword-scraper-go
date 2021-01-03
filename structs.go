@@ -30,4 +30,5 @@ type Keyword struct {
 
 type Context struct {
 	KeywordsFound int
+	TLD           string
 }
