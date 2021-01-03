@@ -14,16 +14,26 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"sync"
 
 	"github.com/fatih/color"
 	"github.com/gosuri/uiprogress"
 )
 
 var (
-	g = color.New(color.FgHiGreen)
-	y = color.New(color.FgHiYellow)
-	r = color.New(color.FgHiRed)
+	g     = color.New(color.FgHiGreen)
+	y     = color.New(color.FgHiYellow)
+	r     = color.New(color.FgHiRed)
+	muCtx sync.RWMutex
 )
+
+var Mids = map[string]string{
+	"com":    "ATVPDKIKX0DER",
+	"ca":     "A2EUQ1WTGCTBG2",
+	"co.uk":  "A1F83G8C2ARO7P",
+	"com.au": "A39IBJ37TRP1C6",
+	"de":     "A1PA6795UKMFR9",
+}
 
 func main() {
 	// Init progress bar
@@ -33,13 +43,14 @@ func main() {
 	concurency := flag.Int("concurency", 5, "the number of goroutines that are allowed to run concurrently")
 	limit := flag.Int("limit", 100, "number of keywords to collect")
 	keywordToUse := flag.String("keyword", "", "keyword to use")
+	domainToSearch := flag.String("tld", "com", "Amazon TLD domain to search; com, ca, co.uk, de, com.au")
 	flag.Parse()
 
 	if *keywordToUse == "" {
 		r.Println("KeyWord is missing. To view help enter: akrt -help")
 		os.Exit(1)
 	}
-	g.Printf("Collect %d relevant keywords to the keyword '%s' \n", *limit, *keywordToUse)
+	g.Printf("[amazon.%s] Collect %d relevant keywords to the keyword '%s' \n", *domainToSearch, *limit, *keywordToUse)
 
 	// Keyword Collector progress bar
 	keywordBar := uiprogress.AddBar(*limit).AppendCompleted().PrependElapsed()
@@ -53,29 +64,38 @@ func main() {
 	keyword := Keyword{*keywordToUse, 0}
 	keyWordList := make(map[string]Keyword)
 	keyChannel := make(chan Keyword)
+	// Initially there's just 1 keyword
+	context := Context{1, *domainToSearch}
 
-	go requestKeyWords(keyChannel, keyword)
+	go requestKeyWords(keyChannel, keyword, &context)
 
-	toLongKeys := 0
 	for item := range keyChannel {
 		if len(keyWordList) >= *limit {
 			break
 		}
-		if toLongKeys > 10 {
-			break
-		}
-		if item.Keyword == "" {
-			toLongKeys++
-		} else {
+
+		if item.Keyword != "" {
 			if _, ok := keyWordList[item.Keyword]; !ok {
 				keywordBar.Incr()
 				keyWordList[item.Keyword] = item
 				go func(item Keyword) {
 					concurrentGoroutines <- struct{}{}
-					requestKeyWords(keyChannel, item)
+					requestKeyWords(keyChannel, item, &context)
 					<-concurrentGoroutines
 				}(item)
+			} else {
+				// decrement total count, because this suggestion is already in the list
+				muCtx.Lock()
+				context.KeywordsFound--
+				muCtx.Unlock()
 			}
+		}
+
+		muCtx.RLock()
+		keywordsFound := context.KeywordsFound
+		muCtx.RUnlock()
+		if keywordsFound <= 0 {
+			break
 		}
 	}
 	// Limiting concurent requests to collect number of products per keyword
@@ -91,7 +111,7 @@ func main() {
 	for key := range keyWordList {
 		go func(item Keyword) {
 			concurrentGoroutinesProductCount <- struct{}{}
-			keywordMetadata(totalResultCount, item)
+			keywordMetadata(totalResultCount, item, &context)
 			<-concurrentGoroutinesProductCount
 		}(keyWordList[key])
 	}
@@ -110,7 +130,8 @@ func main() {
 	records := [][]string{
 		{"#", "key_words", "total_products"},
 	}
-	csvFile, err := os.Create(*keywordToUse + ".csv")
+	filename := fmt.Sprintf("%s_%s.csv", *keywordToUse, context.TLD)
+	csvFile, err := os.Create(filename)
 	if err != nil {
 		log.Fatalf("Failed creating file: %s", err)
 	}
@@ -123,19 +144,19 @@ func main() {
 	}
 	csvwriter.WriteAll(records)
 
-	y.Printf("Collected %d keywords: '%s.csv' \n", len(keyWordList), *keywordToUse)
+	y.Printf("Collected %d keywords: '%s' \n", len(keyWordList), filename)
 
 }
 
-func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
+func requestKeyWords(keyChannel chan Keyword, keyword Keyword, context *Context) {
 	client := http.Client{}
 
-	req, _ := http.NewRequest("GET", "https://completion.amazon.com/api/2017/suggestions", nil)
+	req, _ := http.NewRequest("GET", fmt.Sprintf("https://completion.amazon.%s/api/2017/suggestions", context.TLD), nil)
 
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_"+strconv.Itoa(rand.Intn(15-9)+9)+"_1) AppleWebKit/531.36 (KHTML, like Gecko) Chrome/"+strconv.Itoa(rand.Intn(79-70)+70)+".0.3945.130 Safari/531.36")
 
 	q := req.URL.Query()
-	q.Add("mid", "ATVPDKIKX0DER")
+	q.Add("mid", Mids[context.TLD])
 	q.Add("alias", "aps")
 	q.Add("fresh", "0")
 	q.Add("ks", "88")
@@ -158,6 +179,15 @@ func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
 		log.Fatalln("No keywords found")
 	}
 
+	// Substract look up keyword and add suggestions, if any
+	muCtx.Lock()
+	if len(result.Suggestions) == 1 {
+		context.KeywordsFound--
+	} else {
+		context.KeywordsFound += len(result.Suggestions) - 1
+	}
+	muCtx.Unlock()
+
 	if len(result.Suggestions) == 1 {
 		keyChannel <- Keyword{"", 0}
 	} else {
@@ -167,14 +197,14 @@ func requestKeyWords(keyChannel chan Keyword, keyword Keyword) {
 	}
 }
 
-func keywordMetadata(totalResultCount chan Keyword, keyword Keyword) {
+func keywordMetadata(totalResultCount chan Keyword, keyword Keyword, context *Context) {
 	client := http.Client{}
 
-	req, _ := http.NewRequest("GET", "https://www.amazon.com/s", nil)
+	req, _ := http.NewRequest("GET", fmt.Sprintf("https://www.amazon.%s/s", context.TLD), nil)
 
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_"+strconv.Itoa(rand.Intn(15-9)+9)+"_1) AppleWebKit/531.36 (KHTML, like Gecko) Chrome/"+strconv.Itoa(rand.Intn(79-70)+70)+".0.3945.130 Safari/531.36")
-	req.Header.Set("Origin", "https://www.amazon.com")
-	req.Header.Set("Referer", "https://www.amazon.com/")
+	req.Header.Set("Origin", fmt.Sprintf("https://www.amazon.%s", context.TLD))
+	req.Header.Set("Referer", fmt.Sprintf("https://www.amazon.%s", context.TLD))
 	req.Header.Set("Accept-Encoding", "gzip")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9,ru;q=0.8")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9")

@@ -12,6 +12,7 @@ type Suggestion struct {
 	BlackListed    bool   `json:"blackListed"`
 	XcatOnly       bool   `json:"xcatOnly"`
 }
+
 type KeywordSuggestions struct {
 	Alias             string       `json:"alias"`
 	Prefix            string       `json:"prefix"`
@@ -25,4 +26,9 @@ type KeywordSuggestions struct {
 type Keyword struct {
 	Keyword          string
 	TotalResultCount int64
+}
+
+type Context struct {
+	KeywordsFound int
+	TLD           string
 }
